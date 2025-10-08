@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jpmc.midascore.entity.UserRecord;
+import com.jpmc.midascore.foundation.Transaction;
 import com.jpmc.midascore.repository.UserRepository;
 import com.jpmc.midascore.TransactionRecord;
 import com.jpmc.midascore.TransactionRepository;
@@ -26,8 +27,10 @@ public class Listener {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private IncentiveGetter incentiveGetter;
+
     @KafkaListener(topics = "${general.kafka-topic}", groupId = "midas-core")
-    // payload={"senderId":4,"recipientId":9,"amount":92.3}
     public void listen(String message) {
         try {
             JsonNode node = new ObjectMapper().readTree(message);
@@ -58,27 +61,28 @@ public class Listener {
                 UserRecord recipient = recipientDetails.get();
 
                 if (sender.getBalance() < amount) {
-                    throw new IllegalArgumentException("invalid transaction " + sender.getBalance() + " " + amount);
+                    throw new IllegalArgumentException("invalid transaction from sender " + sender.getName() + " with "+ sender.getBalance() + ", trying to send " + amount);
                 } else {
                     // executes transaction
                     sender.setBalance(sender.getBalance() - amount);
                     recipient.setBalance(recipient.getBalance() + amount);
-                    userRepository.save(sender);
-                    userRepository.save(recipient);
 
                     TransactionRecord record = new TransactionRecord();
                     record.setSender(sender);
                     record.setRecipient(recipient);
                     record.setAmount(amount);
 
-                    //Transaction transaction = new Transaction(senderId, recipientId, amount);
-                    //System.out.println(transaction.toString());
-                    record.setSender(sender);
-                    record.setRecipient(recipient);
-                    record.setAmount(amount);
-
                     transactionRepository.save(record);
+
+                    Transaction transaction = new Transaction(senderId, recipientId, amount);
+                    Incentive incentive = incentiveGetter.getIncentive(transaction);
+
+                    recipient.setBalance(recipient.getBalance() + incentive.getAmount());
+                    userRepository.save(sender);
+                    userRepository.save(recipient);
+
                     printAllUsers();
+
                 }
 
             } else {
@@ -90,11 +94,6 @@ public class Listener {
             System.err.println(e.getMessage());
         }
     }
-
-    // @Bean
-    // public RecordMessageConverter converter() {
-    //     return new StringJsonMessageConverter();
-    // }
 
     public void printAllUsers() {
         List<UserRecord> users = (List<UserRecord>) userRepository.findAll();
